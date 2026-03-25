@@ -190,8 +190,10 @@ def analyze(ctx, target):
 @click.option("--rules-only", is_flag=True, help="Only run static rules, skip AI")
 @click.option("--roo", is_flag=True, help="Generate Roo Code instruction file")
 @click.option("--patch", is_flag=True, help="Generate patch file")
+@click.option("--no-cache", is_flag=True, help="Force regenerate (skip cache)")
+@click.option("--summary", is_flag=True, help="Directory-level summary report")
 @click.pass_context
-def run(ctx, target, provider, rules_only, roo, patch):
+def run(ctx, target, provider, rules_only, roo, patch, no_cache, summary):
     """Run full self-test pipeline on a file or directory."""
     from selftest.analyzer.ast_analyzer import analyze_file
     from selftest.generator.ai_client import AIClient, AIProviderError
@@ -212,9 +214,13 @@ def run(ctx, target, provider, rules_only, roo, patch):
         if not py_files:
             click.echo(f"No .py files found in {target}")
             return
+        all_results = []
         for f in py_files:
             ctx.invoke(run, target=str(f), provider=provider,
-                       rules_only=rules_only, roo=roo, patch=patch)
+                       rules_only=rules_only, roo=roo, patch=patch,
+                       no_cache=no_cache, summary=False)
+        if summary:
+            _render_directory_summary(target_path, _ensure_selftest_dir(target_path))
         return
 
     config_path = _find_config(ctx.obj.get("config_path"))
@@ -267,27 +273,43 @@ def run(ctx, target, provider, rules_only, roo, patch):
         render_terminal_report(rule_result, analysis=analysis)
         return
 
-    # Step 3: Build prompt and call AI
+    # Step 3: Build prompt and call AI (with cache)
     if verbose:
         click.echo("[3/4] AI 產生測試碼...")
+
+    from selftest.generator.cache import AICache, hash_prompt_config
 
     prompts_dir = selftest_dir / "rules" / "prompts"
     prompt = build_prompt(analysis, user_prompts_dir=prompts_dir if prompts_dir.exists() else None)
 
-    try:
-        ai_config = {}
-        if config.ai_provider == "local_llm":
-            ai_config = config.local_llm
-        elif config.ai_provider == "company_platform":
-            ai_config = config.company_platform
-        ai_config["max_response_tokens"] = str(config.max_response_tokens)
+    source_content = source_text
+    prompt_config_hash = hash_prompt_config(prompts_dir if prompts_dir.exists() else None)
+    cache = AICache(selftest_dir / "cache", ttl_days=config.keep_days)
 
-        client = AIClient(provider=config.ai_provider, config=ai_config)
-        ai_response = client.generate(prompt)
-    except (AIProviderError, ConnectionError, Exception) as e:
-        click.echo(f"\n⚠ AI 呼叫失敗: {e}", err=True)
-        click.echo("降級為靜態規則模式", err=True)
-        return
+    ai_response = None
+    if not no_cache:
+        ai_response = cache.get(source_content, prompt_config_hash)
+        if ai_response and verbose:
+            click.echo("  ✓ 使用快取的 AI 回應")
+
+    if ai_response is None:
+        try:
+            ai_config = {}
+            if config.ai_provider == "local_llm":
+                ai_config = config.local_llm
+            elif config.ai_provider == "company_platform":
+                ai_config = config.company_platform
+            ai_config["max_response_tokens"] = str(config.max_response_tokens)
+
+            client = AIClient(provider=config.ai_provider, config=ai_config)
+            ai_response = client.generate(prompt)
+
+            # Cache the response
+            cache.put(source_content, prompt_config_hash, ai_response)
+        except (AIProviderError, ConnectionError, Exception) as e:
+            click.echo(f"\n⚠ AI 呼叫失敗: {e}", err=True)
+            click.echo("降級為靜態規則模式", err=True)
+            return
 
     # Step 3: Parse and validate test code
     test_code = parse_ai_response(ai_response)
@@ -455,6 +477,53 @@ def fix(ctx, target):
         click.echo(f"  備份: {backup_dir / target_path.name}.bak")
     else:
         click.echo("沒有套用任何修改")
+
+
+def _render_directory_summary(target_dir: Path, selftest_dir: Path) -> None:
+    """Render a summary report for all results in a directory."""
+    data_dir = selftest_dir / "data"
+    if not data_dir.exists():
+        return
+
+    result_files = sorted(data_dir.glob("*.result.json"))
+    if not result_files:
+        click.echo("沒有找到任何測試結果")
+        return
+
+    total_passed = 0
+    total_failed = 0
+    total_errors = 0
+    total_violations = 0
+    file_summaries = []
+
+    for rf in result_files:
+        data = json.loads(rf.read_text(encoding="utf-8"))
+        r = TestResult.from_dict(data)
+        total_passed += r.passed
+        total_failed += r.failed
+        total_errors += r.errors
+        total_violations += len(r.rule_violations)
+        file_summaries.append({
+            "name": Path(r.file_path).name,
+            "passed": r.passed,
+            "failed": r.failed,
+            "coverage": r.coverage.coverage_percent,
+            "violations": len(r.rule_violations),
+        })
+
+    click.echo(f"\n{'=' * 60}")
+    click.echo(f" 目錄摘要: {target_dir}")
+    click.echo(f"{'=' * 60}")
+    click.echo(f" 檔案數: {len(result_files)}")
+    click.echo(f" 總計: {total_passed} passed, {total_failed} failed, {total_errors} errors")
+    click.echo(f" 靜態規則: {total_violations} issues")
+    click.echo(f"{'─' * 60}")
+
+    for s in file_summaries:
+        status = "✓" if s["failed"] == 0 else "✗"
+        click.echo(f" {status} {s['name']:30s} {s['passed']}P {s['failed']}F  cov:{s['coverage']:.0f}%  rules:{s['violations']}")
+
+    click.echo(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":
