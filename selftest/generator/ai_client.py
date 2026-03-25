@@ -78,7 +78,13 @@ class AIClient:
 
     def _call_openai_compatible(self, prompt: str) -> str:
         """Call OpenAI-compatible API (local vLLM, Ollama, etc.)."""
-        from openai import OpenAI
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise AIProviderError(
+                "openai 套件未安裝。如需使用 local_llm 後端，請執行: pip install selftest[local_llm]\n"
+                "如果只用公司 AI 平台（Nexus），請在 selftest.ini 設定 provider = company_platform"
+            )
 
         client = OpenAI(
             base_url=self.config.get("endpoint", "http://localhost:8080/v1"),
