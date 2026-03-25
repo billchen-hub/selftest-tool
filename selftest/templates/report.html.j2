@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>selftest report — {{ result.file_path }}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.5em; margin-bottom: 8px; }
+  h2 { font-size: 1.2em; margin: 20px 0 10px; border-bottom: 2px solid #ddd; padding-bottom: 4px; }
+  .timestamp { color: #888; font-size: 0.9em; margin-bottom: 20px; }
+
+  /* Summary cards */
+  .summary { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .card { flex: 1; min-width: 140px; background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+  .card .number { font-size: 2em; font-weight: bold; }
+  .card .label { font-size: 0.85em; color: #666; margin-top: 4px; }
+  .card.pass .number { color: #27ae60; }
+  .card.fail .number { color: #e74c3c; }
+  .card.coverage .number { color: {% if result.coverage.coverage_percent >= 80 %}#27ae60{% elif result.coverage.coverage_percent >= 60 %}#f39c12{% else %}#e74c3c{% endif %}; }
+
+  /* Test details */
+  .test-list { list-style: none; }
+  .test-item { background: #fff; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+  .test-item.passed { border-left: 4px solid #27ae60; }
+  .test-item.failed { border-left: 4px solid #e74c3c; }
+  .test-item.error { border-left: 4px solid #e67e22; }
+  .test-name { font-weight: bold; font-family: monospace; }
+  .test-status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; margin-left: 8px; }
+  .test-status.passed { background: #d4edda; color: #155724; }
+  .test-status.failed { background: #f8d7da; color: #721c24; }
+  .test-status.error { background: #ffeeba; color: #856404; }
+  .test-detail { margin-top: 8px; font-size: 0.9em; color: #555; }
+  .test-detail dt { font-weight: bold; color: #333; }
+  .test-detail dd { margin-left: 16px; margin-bottom: 4px; }
+
+  /* Rule violations */
+  .violation { background: #fff; border-radius: 6px; padding: 10px 16px; margin-bottom: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+  .violation.error { border-left: 4px solid #e74c3c; }
+  .violation.warning { border-left: 4px solid #f39c12; }
+  .violation .line { font-family: monospace; color: #888; }
+  .violation .desc { font-weight: bold; }
+  .violation .snippet { font-family: monospace; font-size: 0.85em; color: #666; background: #f8f8f8; padding: 2px 6px; border-radius: 3px; }
+
+  /* Source coverage */
+  .source-view { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto; }
+  .source-view pre { font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85em; line-height: 1.6; }
+  .line-covered { background: #d4edda; }
+  .line-uncovered { background: #f8d7da; }
+  .line-num { display: inline-block; width: 40px; text-align: right; color: #999; margin-right: 12px; user-select: none; }
+
+  /* Footer */
+  .footer { margin-top: 30px; padding-top: 10px; border-top: 1px solid #ddd; color: #999; font-size: 0.8em; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>selftest report</h1>
+  <div class="timestamp">{{ result.file_path }} — {{ timestamp }}</div>
+
+  <!-- Summary -->
+  <div class="summary">
+    <div class="card pass">
+      <div class="number">{{ result.passed }}</div>
+      <div class="label">Passed</div>
+    </div>
+    <div class="card fail">
+      <div class="number">{{ result.failed }}</div>
+      <div class="label">Failed</div>
+    </div>
+    <div class="card coverage">
+      <div class="number">{{ "%.1f"|format(result.coverage.coverage_percent) }}%</div>
+      <div class="label">Coverage</div>
+    </div>
+    <div class="card">
+      <div class="number">{{ result.rule_violations|length }}</div>
+      <div class="label">Rule Issues</div>
+    </div>
+  </div>
+
+  <!-- Failed Tests -->
+  {% if failed_tests %}
+  <h2>Failed Tests</h2>
+  <ul class="test-list">
+    {% for t in failed_tests %}
+    <li class="test-item failed">
+      <span class="test-name">{{ t.test_name }}</span>
+      <span class="test-status failed">FAILED</span>
+      {% if t.path_description %}
+      <div class="test-detail">{{ t.path_description }}</div>
+      {% endif %}
+      <dl class="test-detail">
+        {% if t.cause %}<dt>原因</dt><dd>{{ t.cause }}</dd>{% endif %}
+        {% if t.actual %}<dt>實際行為</dt><dd>{{ t.actual }}</dd>{% endif %}
+        {% if t.suggestion %}<dt>建議</dt><dd>{{ t.suggestion }}</dd>{% endif %}
+        {% if t.traceback %}<dt>Traceback</dt><dd><pre>{{ t.traceback }}</pre></dd>{% endif %}
+      </dl>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <!-- All Tests -->
+  <h2>All Tests ({{ result.passed + result.failed + result.errors }})</h2>
+  <ul class="test-list">
+    {% for t in result.details %}
+    <li class="test-item {{ t.status }}">
+      <span class="test-name">{{ t.test_name }}</span>
+      <span class="test-status {{ t.status }}">{{ t.status|upper }}</span>
+      {% if t.path_description %}
+      <div class="test-detail">{{ t.path_description }}</div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  <!-- Rule Violations -->
+  {% if result.rule_violations %}
+  <h2>Static Rule Violations ({{ result.rule_violations|length }})</h2>
+  {% for v in result.rule_violations %}
+  <div class="violation {{ v.severity }}">
+    <span class="line">L{{ v.line }}</span>
+    <span class="desc">[{{ v.severity }}] {{ v.description }}</span>
+    <div><span class="snippet">{{ v.code_snippet }}</span></div>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <!-- Coverage -->
+  <h2>Coverage</h2>
+  <div class="summary">
+    <div class="card coverage">
+      <div class="number">{{ "%.1f"|format(result.coverage.coverage_percent) }}%</div>
+      <div class="label">{{ result.coverage.covered_paths }} / {{ result.coverage.total_paths }} paths</div>
+    </div>
+  </div>
+  {% if result.coverage.uncovered_lines %}
+  <p style="margin-top:8px;color:#888;">Uncovered lines: {{ result.coverage.uncovered_lines|join(', ') }}</p>
+  {% endif %}
+
+  {% if result.coverage.boundary_tests %}
+  <h2>Boundary Value Tests</h2>
+  <ul class="test-list">
+    {% for var_name, passed in result.coverage.boundary_tests.items() %}
+    <li class="test-item {{ 'passed' if passed else 'failed' }}">
+      <span class="test-name">{{ var_name }}</span>
+      <span class="test-status {{ 'passed' if passed else 'failed' }}">{{ 'PASS' if passed else 'FAIL' }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <!-- Source with coverage coloring -->
+  {% if source_lines %}
+  <h2>Source Code Coverage</h2>
+  <div class="source-view">
+    <pre>{% for line in source_lines %}<span class="{{ line.css_class }}"><span class="line-num">{{ line.num }}</span>{{ line.text }}</span>
+{% endfor %}</pre>
+  </div>
+  {% endif %}
+
+  <div class="footer">
+    Generated by selftest v{{ version }} — {{ timestamp }}
+  </div>
+</div>
+</body>
+</html>

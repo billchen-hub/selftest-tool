@@ -1,0 +1,39 @@
+rules:
+  # --- Coding safety rules ---
+  - id: no_bare_except
+    description: "禁止使用 bare except（應指定具體 exception 類型）"
+    severity: error
+    match:
+      pattern: "except\\s*:"
+
+  - id: no_pass_in_except
+    description: "except 區塊不應只有 pass（吞掉錯誤）"
+    severity: warning
+    match:
+      pattern: "except.*:\\s*\\n\\s+pass\\s*$"
+      multiline: true
+
+  - id: no_exit_call
+    description: "避免直接呼叫 exit() 或 sys.exit()（應 raise exception）"
+    severity: warning
+    match:
+      pattern: "(?:sys\\.)?exit\\s*\\("
+
+  # --- Assertion quality (for generated tests) ---
+  - id: no_assert_true
+    description: "禁止 assert True（無意義的斷言）"
+    severity: error
+    match:
+      pattern: "assert\\s+True\\b"
+
+  - id: no_assert_is_not_none
+    description: "禁止 assert x is not None（太寬鬆）"
+    severity: warning
+    match:
+      pattern: "assert\\s+\\w+\\s+is\\s+not\\s+None"
+
+  - id: no_assert_isinstance
+    description: "禁止僅用 isinstance 斷言（應斷言具體值）"
+    severity: warning
+    match:
+      pattern: "assert\\s+isinstance\\s*\\("
