@@ -191,9 +191,10 @@ def analyze(ctx, target):
 @click.option("--roo", is_flag=True, help="Generate Roo Code instruction file")
 @click.option("--patch", is_flag=True, help="Generate patch file")
 @click.option("--no-cache", is_flag=True, help="Force regenerate (skip cache)")
+@click.option("--dry-run", is_flag=True, help="Use mock AI response (no real AI needed)")
 @click.option("--summary", is_flag=True, help="Directory-level summary report")
 @click.pass_context
-def run(ctx, target, provider, rules_only, roo, patch, no_cache, summary):
+def run(ctx, target, provider, rules_only, roo, patch, no_cache, dry_run, summary):
     """Run full self-test pipeline on a file or directory."""
     from selftest.analyzer.ast_analyzer import analyze_file
     from selftest.generator.ai_client import AIClient, AIProviderError
@@ -218,7 +219,7 @@ def run(ctx, target, provider, rules_only, roo, patch, no_cache, summary):
         for f in py_files:
             ctx.invoke(run, target=str(f), provider=provider,
                        rules_only=rules_only, roo=roo, patch=patch,
-                       no_cache=no_cache, summary=False)
+                       no_cache=no_cache, dry_run=dry_run, summary=False)
         if summary:
             _render_directory_summary(target_path, _ensure_selftest_dir(target_path))
         return
@@ -273,47 +274,54 @@ def run(ctx, target, provider, rules_only, roo, patch, no_cache, summary):
         render_terminal_report(rule_result, analysis=analysis)
         return
 
-    # Step 3: Build prompt and call AI (with cache)
-    if verbose:
-        click.echo("[3/4] AI 產生測試碼...")
+    # Step 3: Build prompt and call AI (with cache), or dry-run
+    if dry_run:
+        if verbose:
+            click.echo("[3/4] Dry-run 模式：產生基礎測試碼（跳過 AI）...")
+        from selftest.generator.dry_run import generate_dry_run_tests
+        test_code = generate_dry_run_tests(analysis)
+        quality_issues = []
+    else:
+        if verbose:
+            click.echo("[3/4] AI 產生測試碼...")
 
-    from selftest.generator.cache import AICache, hash_prompt_config
+        from selftest.generator.cache import AICache, hash_prompt_config
 
-    prompts_dir = selftest_dir / "rules" / "prompts"
-    prompt = build_prompt(analysis, user_prompts_dir=prompts_dir if prompts_dir.exists() else None)
+        prompts_dir = selftest_dir / "rules" / "prompts"
+        prompt = build_prompt(analysis, user_prompts_dir=prompts_dir if prompts_dir.exists() else None)
 
-    source_content = source_text
-    prompt_config_hash = hash_prompt_config(prompts_dir if prompts_dir.exists() else None)
-    cache = AICache(selftest_dir / "cache", ttl_days=config.keep_days)
+        source_content = source_text
+        prompt_config_hash = hash_prompt_config(prompts_dir if prompts_dir.exists() else None)
+        cache = AICache(selftest_dir / "cache", ttl_days=config.keep_days)
 
-    ai_response = None
-    if not no_cache:
-        ai_response = cache.get(source_content, prompt_config_hash)
-        if ai_response and verbose:
-            click.echo("  ✓ 使用快取的 AI 回應")
+        ai_response = None
+        if not no_cache:
+            ai_response = cache.get(source_content, prompt_config_hash)
+            if ai_response and verbose:
+                click.echo("  ✓ 使用快取的 AI 回應")
 
-    if ai_response is None:
-        try:
-            ai_config = {}
-            if config.ai_provider == "local_llm":
-                ai_config = config.local_llm
-            elif config.ai_provider == "company_platform":
-                ai_config = config.company_platform
-            ai_config["max_response_tokens"] = str(config.max_response_tokens)
+        if ai_response is None:
+            try:
+                ai_config = {}
+                if config.ai_provider == "local_llm":
+                    ai_config = config.local_llm
+                elif config.ai_provider == "company_platform":
+                    ai_config = config.company_platform
+                ai_config["max_response_tokens"] = str(config.max_response_tokens)
 
-            client = AIClient(provider=config.ai_provider, config=ai_config)
-            ai_response = client.generate(prompt)
+                client = AIClient(provider=config.ai_provider, config=ai_config)
+                ai_response = client.generate(prompt)
 
-            # Cache the response
-            cache.put(source_content, prompt_config_hash, ai_response)
-        except (AIProviderError, ConnectionError, Exception) as e:
-            click.echo(f"\n⚠ AI 呼叫失敗: {e}", err=True)
-            click.echo("降級為靜態規則模式", err=True)
-            return
+                # Cache the response
+                cache.put(source_content, prompt_config_hash, ai_response)
+            except (AIProviderError, ConnectionError, Exception) as e:
+                click.echo(f"\n⚠ AI 呼叫失敗: {e}", err=True)
+                click.echo("降級為靜態規則模式", err=True)
+                return
 
-    # Step 3: Parse and validate test code
-    test_code = parse_ai_response(ai_response)
-    quality_issues = validate_test_code(test_code)
+        # Parse and validate test code
+        test_code = parse_ai_response(ai_response)
+        quality_issues = validate_test_code(test_code)
 
     # Add mock setup
     mock_code = generate_mock_setup(analysis)
